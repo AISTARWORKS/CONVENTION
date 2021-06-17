@@ -8,6 +8,10 @@ from IPython import get_ipython
 # #### Developed by A.Okada, T.Shirakami, K.Kuramitsu, K.Iino and N.Yamazaki
 # #### Copyright© A.Okada, T.Shirakami, K.Kuramitsu, K.Iino and N.Yamazaki, 2021
 # #### Start from June 8, 2021
+# 
+# #### https://github.com/AISTARWORKS/CONVENTION.git
+# 
+# git push --set-upstream origin master
 # %% [markdown]
 # ### Sample Generator
 
@@ -19,12 +23,16 @@ import random # ramdom値生成
 import math # 数学演算、logとかsin, cosとか
 import matplotlib.pyplot as plt # グラフに関する
 import matplotlib as mpl # 同じくグラフ関係、要らないかも。
+import seaborn as sns
 
 # DataFrameの値の小数点以下桁数はここで調整。
 pd.options.display.precision = 2
 
 Sampling = 1000
 NumSample = 100
+ArrheniusA = np.e
+ArrheniusB = 1000
+ArrheniusC = 0.035
 
 # 複数FANタイプに対応するため関数化。
 def sample_generator(RpmSpec,
@@ -56,7 +64,7 @@ def sample_generator(RpmSpec,
         else:
             defect = 0
 
-        for time in range(0, LifeSpec*2, Sampling):
+        for time in range(Sampling, LifeSpec*2, Sampling):
 
             temp = 25 + random.uniform(-5,5)
 
@@ -77,8 +85,9 @@ def sample_generator(RpmSpec,
                         #power: rpmの低下により増加する成分と、温度に追従する成分をもつ。+/-5%誤差考慮でランダム 
                         power = (0.5 * (4000/rpm) ** 1.2 + PowerSpec * (temp / TempSpec)) * (1 - random.uniform(-0.05,0.05))
                         death = 0
-                        # remaining_lifeは逆算
-                        remaining_life = ((RpmSpec*temp/TempSpec - 0.1*RpmSpec)**(1/6)) * 8000 * (1 - random.uniform(-0.05,0.05)) - time
+                        # remaining_life
+                        k = ArrheniusA ** (ArrheniusB/(273 + temp)) * ArrheniusC
+                        remaining_life = k * ((rpm*temp/TempSpec - 0.1*cum_rpm/time)**(1/6)) * 8000 * (1 - random.uniform(-0.05,0.05)) - time
                         if remaining_life < 0:
                             remaining_life = 0
                 else: # 良品の場合
@@ -91,7 +100,8 @@ def sample_generator(RpmSpec,
                     else: 
                         power = (0.5 * (4000/rpm) ** 1.1 + PowerSpec * (temp / TempSpec)) * (1 - random.uniform(-0.05,0.05))
                         death = 0
-                        remaining_life = ((RpmSpec*temp/TempSpec - 0.1*RpmSpec)**(1/4)) * 8000 * (1 - random.uniform(-0.05,0.05)) -time
+                        k = ArrheniusA ** (ArrheniusB/(273 + temp)) * ArrheniusC
+                        remaining_life = k * ((rpm*temp/TempSpec - 0.1*cum_rpm/time)**(1/4)) * 8000 * (1 - random.uniform(-0.05,0.05)) -time
                         if remaining_life < 0:
                             remaining_life = 0
 
@@ -123,6 +133,7 @@ def sample_generator(RpmSpec,
                             LifeSpec, 
                             cumurated_life_impact_factor, 
                             death,
+                            k,
                             remaining_life])
     return data_list
 
@@ -185,6 +196,7 @@ df = pd.DataFrame(list,    # listは3種ファン統合。別々にやる場合�
                           'LifeSpec',
                           'cumurated_life_impact_factor', 
                           'death',
+                          'k',
                           'remaining_life'])
 
 # df.to_csv("./sample_data_check3.csv")
@@ -207,6 +219,11 @@ plt.xlabel('time [H]',size=12)
 plt.ylabel('remaining_life [H]',size=12)
 
 fig, ax = plt.subplots()
+ax.scatter(df['time'], df['k'], c=df['sample_id'])
+plt.xlabel('time [H]',size=12)
+plt.ylabel('k (Arrhenius coefficient)',size=12)
+
+fig, ax = plt.subplots()
 ax.scatter(df['time'], df['cum_rpm'], c=df['sample_id'])
 plt.xlabel('time [H]',size=12)
 plt.ylabel('cum_rpm',size=12)
@@ -226,6 +243,10 @@ ax.scatter(df['time'], df['cumurated_life_impact_factor'], c=df['sample_id'])
 plt.xlabel('time [H]',size=12)
 plt.ylabel('cumurated_life_impact_factor',size=12)
 
+# Corelation Analysis
+
+sns.pairplot(df.loc[: ,'defect':'cumurated_life_impact_factor'])
+
 
 # %%
 df = df.dropna(how="any")
@@ -236,7 +257,7 @@ df.drop(indexNames , inplace=True)
 indexNames = df[ df['remaining_life'] == 0 ].index
 df.drop(indexNames , inplace=True)
 
-df.to_csv('./sample_data.csv')
+df.to_csv('./sample_data_v02.csv')
 df
 
 # %% [markdown]
@@ -250,7 +271,7 @@ import matplotlib.pyplot as plt
 plt.style.use('ggplot')
 import seaborn as sns
 
-df = pd.read_csv('sample_data.csv', index_col=[0])
+df = pd.read_csv('sample_data_v02.csv', index_col=[0])
 df = df.dropna(how="any")
 
 # print(df.head(), df.tail())
@@ -266,12 +287,12 @@ plt.xlabel('remaining_life',size=12)
 plt.show()
 
 
-print('Start XGBoost----------------------------------')
+# %%
 from sklearn.model_selection import train_test_split
 import xgboost as xgb
 
 # 機械学習では、学習させる特徴量をX, 求める答えをyで表す。
-X = df.drop(columns=['remaining_life', 'sample_id', 'defect'])
+X = df.drop(columns=['remaining_life', 'sample_id', 'defect', 'k'])
 y = df['remaining_life']
 
 print(X.shape)
@@ -297,6 +318,26 @@ params = {
     'eval_metric': 'rmse',
     'predictor': 'cpu_predictor'
 }
+
+# Xgboost params tutorial
+# https://qiita.com/FJyusk56/items/0649f4362587261bd57a
+
+## objective
+# reg:linear(線形回帰)
+# reg:logistic(ロジスティック回帰)
+# binary:logistic(2項分類で確率を返す)
+# multi:softmax(多項分類でクラスの値を返す)
+
+## eval_metric
+# rmse(2乗平均平方根誤差)
+# logloss(負の対数尺度)
+# error(2-クラス分類のエラー率)
+# merror(多クラス分類のエラー率)
+# mlogloss(多クラスの対数損失)
+# auc(ROC曲線下の面積で性能の良さを表す)
+# mae(平均絶対誤差)
+
+
 
 # GPUの場合
 # params = {
@@ -408,7 +449,7 @@ import matplotlib.pyplot as plt
 plt.style.use('ggplot')
 import seaborn as sns
 
-df = pd.read_csv('sample_data.csv', index_col=[0])
+df = pd.read_csv('sample_data_v02.csv', index_col=[0])
 df = df.dropna(how="any")
 
 # print(df.head(), df.tail())
@@ -428,7 +469,7 @@ plt.show()
 from sklearn.model_selection import train_test_split
 import xgboost as xgb
 
-X = df.drop(columns=['remaining_life', 'sample_id', 'defect'])
+X = df.drop(columns=['remaining_life', 'sample_id', 'defect', 'k'])
 y = df['defect']
 
 print(X.shape)
@@ -543,7 +584,7 @@ report_df.to_csv("./report_detect_defect.csv")
 
 
 # %%
-
+print('Completed!!Completed!!!Completed!!!!Completed!!!!Completed!!!!Completed!!!!Completed!!!')
 
 
 # %%
