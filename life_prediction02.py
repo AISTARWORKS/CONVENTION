@@ -12,6 +12,7 @@ from IPython import get_ipython
 # #### https://github.com/AISTARWORKS/CONVENTION.git
 # 
 # git push --set-upstream origin master
+# git push origin master
 # %% [markdown]
 # ### Sample Generator
 
